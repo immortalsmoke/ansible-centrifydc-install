@@ -1,0 +1,74 @@
+---
+
+- name: "Checking whether Centrify is installed"
+  package:
+    name: centrify
+    state: present
+  check_mode: true
+  register: centrify_installed_check
+
+# This block will execute if package "centrify" is not installed
+- block:
+  - name: "Importing distro variables"
+    include_vars:
+      path: "vars/{{ ansible_os_family }}.yml"
+
+  - name: "Download Centrify DC for {{ ansible_os_family }}"
+    get_url:
+      url: "{{ url_prefix }}{{ filename }}"
+      dest: "/tmp/{{ filename }}"
+
+  - name: "Create temp CentrifyDC extraction directory"
+    file:
+      path: /tmp/centrifydc/
+      state: directory
+
+  - name: "Extract CentrifyDC archive"
+    unarchive: 
+      src: "/tmp/{{ filename }}"
+      dest: "/tmp/centrifydc/"
+
+  - name: "Installing CentrifyDC"
+    command: ./install.sh --express
+      chdir: "/tmp/centrifydc/"
+  
+  when: centrify_installed_check.changed
+
+
+
+# This block will only execute if you've defined {{ domain }} in vars/main.yml     
+- block:
+  # For adinfo, rc 0 prints domain, and rc 10 means "not domain-joined", so we want Ansible not to fail if we get rc 10
+  - name: "Check whether server is joined to {{ domain }}"
+    shell: |
+      adinfo --domain
+    failed_when: adinfo.rc not in [0,10]
+    register: currentdomain
+
+  - debug:
+      msg: Domain join not required, skipping...
+    when: currentdomain.stdout == domain
+    verbosity: 1
+
+  - name: "Joining to domain"
+    block:   
+      - pause:
+          prompt: Please enter adm username
+        register: adm_usr
+
+      - pause:
+          prompt: Please enter adm password
+          echo: no
+        register: adm_pwd
+        no_log: yes
+
+      # Set CentrifyDC mode to Express
+      - shell: |
+          adlicense -e
+
+      - shell: 
+          /usr/sbin/adjoin -w "{{ domain }}" -u "{{ adm_usr.user_input }}" -p "{{ adm_pwd.user_input }}"
+        no_log: yes
+    when: currentdomain.stdout != domain
+
+  when: domain is string
